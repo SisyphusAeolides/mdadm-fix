@@ -1,0 +1,34 @@
+From: Sisyphus Aeolides <SisyphusAeolides@pm.me>
+Date: Sun, 30 Aug 2026 10:28:00 -0500
+Subject: [PATCH] mdadm: Skip missing legacy_async_del_gendisk parameter
+
+On some kernels (e.g. 5.14.0-570.32.1.el9_6), mdadm-4.4-4.el9_7 fails 
+to assemble arrays because it attempts to open 
+/sys/module/md_mod/parameters/legacy_async_del_gendisk which does 
+not exist, as the kernel never merged that parameter.
+
+This patch gracefully checks if the parameter exists before attempting 
+to open and write to it, preventing array assembly failures.
+
+Signed-off-by: Sisyphus Aeolides <SisyphusAeolides@pm.me>
+---
+ util.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/util.c b/util.c
+--- a/util.c
++++ b/util.c
+@@ -2568,6 +2568,11 @@ bool set_md_mod_parameter(const char *name, const char *value)
+ 
+ 	snprintf(path, sizeof(path), "/sys/module/md_mod/parameters/%s", name);
+ 
++	if (access(path, F_OK) != 0) {
++		/* Parameter does not exist in this kernel, nothing to set. */
++		return true;
++	}
++
+ 	fd = open(path, O_WRONLY);
+ 	if (fd < 0) {
+ 		pr_err("Can't open %s\n", path);
+--
+2.43.0

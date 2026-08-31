@@ -30,19 +30,18 @@ path strings.
 Fixes: mdadm-4.4 regression on RHEL 9.6 / EL9 kernels < 5.18
 Signed-off-by: Sisyphus Aeolides <SisyphusAeolides@pm.me>
 ---
- util.c | 16 ++++++++++++----
- 1 file changed, 12 insertions(+), 4 deletions(-)
+ util.c | 20 +++++++++++++++++---
+ 1 file changed, 17 insertions(+), 3 deletions(-)
 
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -2562,20 +2562,28 @@ bool set_md_mod_parameter(const char *name, const char *value)
+@@ -2562,20 +2562,34 @@ bool set_md_mod_parameter(const char *name, const char *value)
  {
  	char path[PATH_MAX];
  	int fd;
--	int len;
 +	ssize_t written;
-+	int len;
+ 	int len;
 +	int saved_errno;
  
  	snprintf(path, sizeof(path), "/sys/module/md_mod/parameters/%s", name);
@@ -50,7 +49,6 @@ diff --git a/util.c b/util.c
  	fd = open(path, O_WRONLY);
  	if (fd < 0) {
 -		pr_err("Can't open %s\n", path);
--		return false;
 +		saved_errno = errno;
 +		if (saved_errno == ENOENT) {
 +			/*
@@ -62,7 +60,7 @@ diff --git a/util.c b/util.c
 +			return true;
 +		}
 +		pr_err("Can't open %s: %s\n", path, strerror(saved_errno));
-+		return false;
+ 		return false;
  	}
  
  	len = strlen(value);

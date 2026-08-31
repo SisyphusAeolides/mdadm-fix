@@ -10,13 +10,7 @@ the file at all, causing mdadm-4.4 to abort array assembly with:
 
   mdadm: Can't open /sys/module/md_mod/parameters/legacy_async_del_gendisk
 
-The previous approach of calling access(path, F_OK) before open()
-introduces a TOCTOU race (the sysfs node could disappear between the
-two calls on module unload) and also conflates ENOENT with EACCES,
-silently swallowing genuine permission errors.
-
-Fix this by eliminating the access(2) pre-check entirely and instead
-inspecting errno directly after the open(2) fails:
+Fix this by inspecting errno directly after the open(2) fails:
 
   - ENOENT: the parameter does not exist on this kernel; skip silently
     and return success, matching the "no-op is correct" intent.
@@ -30,18 +24,16 @@ path strings.
 Fixes: mdadm-4.4 regression on RHEL 9.6 / EL9 kernels < 5.18
 Signed-off-by: Sisyphus Aeolides <SisyphusAeolides@pm.me>
 ---
- util.c | 20 +++++++++++++++++---
- 1 file changed, 17 insertions(+), 3 deletions(-)
+ util.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -2562,20 +2562,34 @@ bool set_md_mod_parameter(const char *name, const char *value)
- {
- 	char path[PATH_MAX];
+@@ -2500,17 +2500,21 @@ bool set_md_mod_parameter(const char *name, const char *value)
+ 	char path[256];
  	int fd;
-+	ssize_t written;
- 	int len;
+ 	bool ret = true;
 +	int saved_errno;
  
  	snprintf(path, sizeof(path), "/sys/module/md_mod/parameters/%s", name);
@@ -50,28 +42,15 @@ diff --git a/util.c b/util.c
  	if (fd < 0) {
 -		pr_err("Can't open %s\n", path);
 +		saved_errno = errno;
-+		if (saved_errno == ENOENT) {
-+			/*
-+			 * This kernel does not expose the parameter at all.
-+			 * That is not an error — the caller's intent is
-+			 * already satisfied (the knob doesn't exist, so the
-+			 * old behaviour is in effect by definition).
-+			 */
++		if (saved_errno == ENOENT)
 +			return true;
-+		}
 +		pr_err("Can't open %s: %s\n", path, strerror(saved_errno));
  		return false;
  	}
  
- 	len = strlen(value);
--	if (write(fd, value, len) != len) {
--		pr_err("Can't write to %s\n", path);
-+	written = write(fd, value, len);
-+	if (written != len) {
-+		pr_err("Can't write to %s: %s\n", path,
-+		       written < 0 ? strerror(errno) : "short write");
- 		close(fd);
- 		return false;
+ 	if (write(fd, value, strlen(value)) != (ssize_t)strlen(value)) {
+-		pr_err("Failed to write to %s\n", path);
++		pr_err("Failed to write to %s: %s\n", path, strerror(errno));
+ 		ret = false;
  	}
---
-2.43.0
+ 

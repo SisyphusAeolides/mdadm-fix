@@ -1,0 +1,56 @@
+From: Sisyphus Aeolides <SisyphusAeolides@pm.me>
+Date: Sun, 31 Aug 2026 16:29:00 -0500
+Subject: [PATCH] mdadm: Gracefully handle missing sysfs module parameters
+
+Some kernels do not expose every parameter that a given mdadm build may
+attempt to write. The specific trigger is the legacy_async_del_gendisk
+parameter introduced in 5.18 as a backward-compatibility knob: kernels
+that pre-date that commit (e.g. 5.14.0-570.32.1.el9_6) never expose
+the file at all, causing mdadm-4.4 to abort array assembly with:
+
+  mdadm: Can't open /sys/module/md_mod/parameters/legacy_async_del_gendisk
+
+Fix this by inspecting errno directly after the open(2) fails:
+
+  - ENOENT: the parameter does not exist on this kernel; skip silently
+    and return success, matching the "no-op is correct" intent.
+  - Any other error (EACCES, EIO, ...): log the error with strerror()
+    so the user has actionable diagnostic output, then return failure.
+
+The same errno-aware error message is applied to the write(2) path so
+that both failure modes produce informative output instead of bare
+path strings.
+
+Fixes: mdadm-4.4 regression on RHEL 9.6 / EL9 kernels < 5.18
+Signed-off-by: Sisyphus Aeolides <SisyphusAeolides@pm.me>
+---
+ util.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/util.c b/util.c
+--- a/util.c
++++ b/util.c
+@@ -2500,17 +2500,21 @@ bool set_md_mod_parameter(const char *name, const char *value)
+ 	char path[256];
+ 	int fd;
+ 	bool ret = true;
++	int saved_errno;
+ 
+ 	snprintf(path, sizeof(path), "/sys/module/md_mod/parameters/%s", name);
+ 
+ 	fd = open(path, O_WRONLY);
+ 	if (fd < 0) {
+-		pr_err("Can't open %s\n", path);
++		saved_errno = errno;
++		if (saved_errno == ENOENT)
++			return true;
++		pr_err("Can't open %s: %s\n", path, strerror(saved_errno));
+ 		return false;
+ 	}
+ 
+ 	if (write(fd, value, strlen(value)) != (ssize_t)strlen(value)) {
+-		pr_err("Failed to write to %s\n", path);
++		pr_err("Failed to write to %s: %s\n", path, strerror(errno));
+ 		ret = false;
+ 	}
+ 
